@@ -1,0 +1,47 @@
+version: '3.8'
+
+# Docker Compose configuration using pre-built image from Docker Hub
+# Usage: docker compose -f docker-compose.hub.yml up -d
+
+services:
+  app:
+    image: synapsr/selaou:latest
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - DATABASE_URL=mysql://${DB_USER:-selaou}:${DB_PASSWORD:-selaou}@db:3306/${DB_NAME:-selaou}
+      - NODE_ENV=production
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - selaou-network
+
+  db:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-rootpassword}
+      - MYSQL_DATABASE=${DB_NAME:-selaou}
+      - MYSQL_USER=${DB_USER:-selaou}
+      - MYSQL_PASSWORD=${DB_PASSWORD:-selaou}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - selaou-network
+
+volumes:
+  mysql_data:
+
+networks:
+  selaou-network:
+    driver: bridge
