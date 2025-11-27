@@ -13,6 +13,11 @@ import {
   ChevronDown,
   ChevronUp,
   Play,
+  Download,
+  Database,
+  FileJson,
+  Table,
+  Archive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,8 +71,9 @@ interface Segment {
   audioUrl: string;
 }
 
-type Tab = "reviewers" | "reviews" | "feedback" | "segments";
+type Tab = "reviewers" | "reviews" | "feedback" | "segments" | "export";
 type SortOrder = "asc" | "desc";
+type ExportFormat = "json" | "csv" | "jsonl";
 
 export default function AdminPage() {
   const [token, setToken] = useState("");
@@ -374,6 +380,13 @@ export default function AdminPage() {
             <MessageSquare className="mr-2 h-4 w-4" />
             Segments
           </Button>
+          <Button
+            variant={activeTab === "export" ? "default" : "outline"}
+            onClick={() => setActiveTab("export")}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export
+          </Button>
         </div>
 
         {/* Content */}
@@ -384,31 +397,34 @@ export default function AdminPage() {
               {activeTab === "reviews" && "Dernières annotations"}
               {activeTab === "feedback" && "Alertes et remarques"}
               {activeTab === "segments" && "Segments annotés"}
+              {activeTab === "export" && "Exporter les données"}
             </CardTitle>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                switch (activeTab) {
-                  case "reviewers":
-                    fetchReviewers();
-                    break;
-                  case "reviews":
-                    fetchReviews();
-                    break;
-                  case "feedback":
-                    fetchFeedback();
-                    break;
-                  case "segments":
-                    fetchSegments();
-                    break;
-                }
-              }}
-              disabled={isLoading}
-            >
-              <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-              Actualiser
-            </Button>
+{activeTab !== "export" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  switch (activeTab) {
+                    case "reviewers":
+                      fetchReviewers();
+                      break;
+                    case "reviews":
+                      fetchReviews();
+                      break;
+                    case "feedback":
+                      fetchFeedback();
+                      break;
+                    case "segments":
+                      fetchSegments();
+                      break;
+                  }
+                }}
+                disabled={isLoading}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+                Actualiser
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             {/* Reviewers Tab */}
@@ -738,9 +754,139 @@ export default function AdminPage() {
                 </table>
               </div>
             )}
+
+            {/* Export Tab */}
+            {activeTab === "export" && (
+              <ExportSection token={token} />
+            )}
           </CardContent>
         </Card>
       </div>
     </main>
+  );
+}
+
+interface ExportCardProps {
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  type: string;
+  token: string;
+  formats?: ExportFormat[];
+}
+
+function ExportCard({ title, description, icon, type, token, formats = ["json", "csv"] }: ExportCardProps) {
+  const [selectedFormat, setSelectedFormat] = useState<ExportFormat>("json");
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  const handleDownload = () => {
+    setIsDownloading(true);
+    const url = `/api/admin/export?token=${token}&type=${type}&format=${selectedFormat}`;
+    window.open(url, "_blank");
+    setTimeout(() => setIsDownloading(false), 1000);
+  };
+
+  return (
+    <div className="flex flex-col rounded-lg border bg-card p-6 shadow-sm transition-shadow hover:shadow-md">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+          {icon}
+        </div>
+        <div>
+          <h3 className="font-semibold">{title}</h3>
+          <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
+      </div>
+
+      <div className="mt-auto flex items-center gap-2">
+        <select
+          value={selectedFormat}
+          onChange={(e) => setSelectedFormat(e.target.value as ExportFormat)}
+          className="rounded-md border bg-background px-3 py-2 text-sm"
+        >
+          {formats.includes("json") && <option value="json">JSON</option>}
+          {formats.includes("csv") && <option value="csv">CSV</option>}
+          {formats.includes("jsonl") && <option value="jsonl">JSONL</option>}
+        </select>
+        <Button onClick={handleDownload} disabled={isDownloading} className="flex-1">
+          <Download className="mr-2 h-4 w-4" />
+          {isDownloading ? "Téléchargement..." : "Télécharger"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ExportSection({ token }: { token: string }) {
+  return (
+    <div className="space-y-6">
+      <p className="text-muted-foreground">
+        Exportez vos données dans différents formats selon vos besoins.
+      </p>
+
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <ExportCard
+          title="Dataset IA"
+          description="Format optimisé pour l'entraînement (HuggingFace)"
+          icon={<Database className="h-6 w-6 text-primary" />}
+          type="dataset"
+          token={token}
+          formats={["jsonl", "json", "csv"]}
+        />
+
+        <ExportCard
+          title="Annotateurs"
+          description="Liste des contributeurs et leurs statistiques"
+          icon={<Users className="h-6 w-6 text-primary" />}
+          type="reviewers"
+          token={token}
+        />
+
+        <ExportCard
+          title="Annotations"
+          description="Toutes les corrections et validations"
+          icon={<FileText className="h-6 w-6 text-primary" />}
+          type="reviews"
+          token={token}
+        />
+
+        <ExportCard
+          title="Segments"
+          description="Tous les segments audio avec métadonnées"
+          icon={<Table className="h-6 w-6 text-primary" />}
+          type="segments"
+          token={token}
+        />
+
+        <ExportCard
+          title="Alertes & Remarques"
+          description="Feedbacks signalés par les annotateurs"
+          icon={<AlertTriangle className="h-6 w-6 text-primary" />}
+          type="feedback"
+          token={token}
+        />
+
+        <ExportCard
+          title="Export complet"
+          description="Toutes les données en un seul fichier"
+          icon={<Archive className="h-6 w-6 text-primary" />}
+          type="full"
+          token={token}
+          formats={["json"]}
+        />
+      </div>
+
+      <div className="rounded-lg border border-dashed p-4">
+        <h4 className="mb-2 font-medium flex items-center gap-2">
+          <FileJson className="h-4 w-4" />
+          Formats disponibles
+        </h4>
+        <ul className="space-y-1 text-sm text-muted-foreground">
+          <li><strong>JSON</strong> - Format structuré, idéal pour l&apos;analyse et l&apos;intégration</li>
+          <li><strong>CSV</strong> - Compatible Excel/Google Sheets pour l&apos;analyse manuelle</li>
+          <li><strong>JSONL</strong> - Une ligne par entrée, optimisé pour le streaming et HuggingFace</li>
+        </ul>
+      </div>
+    </div>
   );
 }
