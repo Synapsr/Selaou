@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { importFromJson } from "@/lib/data-sources/importer";
+import { verifyAdminToken, unauthorizedResponse } from "@/lib/admin";
 
-// POST /api/sources/import - Import a single audio source
+// POST /api/sources/import - Import a single audio source (admin only)
 export async function POST(request: NextRequest) {
+  if (!verifyAdminToken(request)) {
+    return unauthorizedResponse();
+  }
+
   try {
     const body = await request.json();
 

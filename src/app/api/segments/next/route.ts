@@ -54,6 +54,7 @@ export async function GET(request: NextRequest) {
       .where(
         and(
           lt(schema.segments.reviewCount, MAX_REVIEWS),
+          // Exclude segments already reviewed by this user
           notExists(
             db
               .select({ one: sql`1` })
@@ -62,6 +63,18 @@ export async function GET(request: NextRequest) {
                 and(
                   eq(schema.reviews.segmentId, schema.segments.id),
                   eq(schema.reviews.reviewerId, reviewer.id)
+                )
+              )
+          ),
+          // Exclude segments with audio_issue alerts
+          notExists(
+            db
+              .select({ one: sql`1` })
+              .from(schema.segmentFeedback)
+              .where(
+                and(
+                  eq(schema.segmentFeedback.segmentId, schema.segments.id),
+                  eq(schema.segmentFeedback.type, "audio_issue")
                 )
               )
           )

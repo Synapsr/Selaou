@@ -10,9 +10,11 @@ Selaou permet de valider et corriger des transcriptions audio (format Whisper) v
 - Lecteur audio intégré avec lecture en boucle du segment
 - Correction mot par mot avec indication de confiance
 - Sélection intelligente des segments (priorise les segments incertains)
-- Système de feedback pour signaler les problèmes
+- Système de feedback pour signaler les problèmes audio
 - Export JSONL/CSV compatible HuggingFace
 - Système d'import flexible (SQL, fichiers JSON, API)
+- **Interface d'administration** sécurisée par token
+- Exclusion automatique des segments signalés comme problématiques
 - Déploiement Docker simple
 
 ## Démarrage rapide
@@ -85,12 +87,15 @@ docker compose up -d
 ```bash
 curl -X POST http://localhost:3000/api/sources/import \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer VOTRE_ADMIN_TOKEN" \
   -d '{
     "name": "Mon episode",
     "audioUrl": "https://example.com/audio.mp3",
     "whisperJson": { ... }
   }'
 ```
+
+> **Note:** L'import nécessite le token admin configuré dans `ADMIN_TOKEN`.
 
 ### Via SQL (base externe)
 
@@ -138,6 +143,34 @@ Sortie:
 curl "http://localhost:3000/api/export?format=csv&only_corrections=true"
 ```
 
+## Administration
+
+L'interface d'administration est accessible à `/admin` et permet de:
+
+- Voir la liste des annotateurs (triée par nombre d'annotations)
+- Consulter l'historique des annotations
+- Gérer les alertes et remarques signalées par les utilisateurs
+- Supprimer des segments problématiques
+
+### Configuration
+
+1. Générer un token sécurisé:
+```bash
+openssl rand -hex 32
+```
+
+2. Ajouter dans `.env.local`:
+```bash
+ADMIN_TOKEN=votre_token_genere
+```
+
+3. Accéder à `http://localhost:3000/admin` et entrer le token.
+
+### Comportement automatique
+
+- Les segments signalés avec une **alerte audio** sont automatiquement exclus de la sélection pour les annotateurs
+- Les remarques simples n'excluent pas le segment mais sont visibles dans l'admin
+
 ## Structure du projet
 
 ```
@@ -146,7 +179,9 @@ selaou/
 │   ├── app/                 # Pages et API Next.js
 │   │   ├── page.tsx         # Page d'accueil
 │   │   ├── review/          # Interface d'annotation
+│   │   ├── admin/           # Interface d'administration
 │   │   └── api/             # Routes API
+│   │       └── admin/       # Routes API admin (sécurisées)
 │   ├── components/          # Composants React
 │   │   ├── ui/              # shadcn/ui
 │   │   ├── audio/           # Lecteur audio
@@ -167,6 +202,7 @@ Variables d'environnement principales:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `DATABASE_URL` | URL de connexion MySQL | - |
+| `ADMIN_TOKEN` | Token d'accès à l'interface admin | - |
 | `SELECTION_UNCERTAINTY_WEIGHT` | Poids pour prioriser segments incertains (0-1) | `0.7` |
 | `SELECTION_MAX_REVIEWS` | Reviews max par segment | `3` |
 
@@ -174,14 +210,26 @@ Voir `.env.example` pour toutes les options.
 
 ## API
 
+### Routes publiques
+
 | Endpoint | Méthode | Description |
 |----------|---------|-------------|
 | `/api/segments/next` | GET | Prochain segment à annoter |
 | `/api/reviews` | POST | Soumettre une annotation |
 | `/api/feedback` | POST | Signaler un problème sur un segment |
-| `/api/sources/import` | POST | Importer une source audio |
 | `/api/export` | GET | Exporter les données |
 | `/api/stats` | GET | Statistiques globales |
+
+### Routes admin (token requis)
+
+| Endpoint | Méthode | Description |
+|----------|---------|-------------|
+| `/api/sources/import` | POST | Importer une source audio |
+| `/api/admin/reviewers` | GET | Liste des annotateurs |
+| `/api/admin/reviews` | GET | Liste des annotations |
+| `/api/admin/feedback` | GET | Alertes et remarques |
+| `/api/admin/segments` | GET | Liste des segments |
+| `/api/admin/segments/:id` | DELETE | Supprimer un segment |
 
 ## Contribuer
 
@@ -192,6 +240,13 @@ Les contributions sont les bienvenues ! N'hésitez pas à ouvrir une issue ou un
 3. Commit (`git commit -m 'Ajout fonctionnalité'`)
 4. Push (`git push origin feature/amélioration`)
 5. Ouvrir une Pull Request
+
+## Roadmap
+
+- [ ] Interface de connexion avec authentification par email
+- [ ] Système de vérification d'email pour les annotateurs
+- [ ] Dashboard de statistiques avancées
+- [ ] Support multi-langues
 
 ## Licence
 
