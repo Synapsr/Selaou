@@ -16,10 +16,15 @@ const MIN_TEXT_LENGTH = 10; // characters
 const ANONYMOUS_MIN_CONFIDENCE = 0.5;
 const ANONYMOUS_MAX_CONFIDENCE = 0.9;
 
+// Mode-based confidence thresholds
+const EASY_MIN_CONFIDENCE = 0.85;
+const CHALLENGE_MAX_CONFIDENCE = 0.7;
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const email = searchParams.get("email");
   const random = searchParams.get("random") === "true";
+  const mode = searchParams.get("mode") || "mixed"; // "mixed" | "easy" | "challenge"
 
   try {
     // Get or create reviewer (only if email provided)
@@ -54,9 +59,12 @@ export async function GET(request: NextRequest) {
     } else if (isAnonymous) {
       // For anonymous users, just use random within the filtered confidence range
       orderClause = sql`RAND()`;
-    } else {
-      // For authenticated users, prioritize uncertain segments
+    } else if (mode === "challenge") {
+      // For challenge mode, prioritize most uncertain segments
       orderClause = sql`((1 - ${schema.segments.confidence}) * ${UNCERTAINTY_WEIGHT} + RAND() * ${1 - UNCERTAINTY_WEIGHT}) DESC`;
+    } else {
+      // For easy and mixed modes, use random selection (filtering handles the rest)
+      orderClause = sql`RAND()`;
     }
 
     // Build where conditions
@@ -80,12 +88,27 @@ export async function GET(request: NextRequest) {
       )
     ];
 
-    // For anonymous users, filter to medium confidence range for better first impression
+    // Apply confidence filtering based on mode and authentication status
     if (isAnonymous) {
+      // For anonymous users, filter to medium confidence range for better first impression
       whereConditions.push(
         gte(schema.segments.confidence, String(ANONYMOUS_MIN_CONFIDENCE)),
         lte(schema.segments.confidence, String(ANONYMOUS_MAX_CONFIDENCE))
       );
+    } else {
+      // For authenticated users, apply mode-based filtering
+      if (mode === "easy") {
+        // High confidence segments only
+        whereConditions.push(
+          gte(schema.segments.confidence, String(EASY_MIN_CONFIDENCE))
+        );
+      } else if (mode === "challenge") {
+        // Low confidence segments only
+        whereConditions.push(
+          lt(schema.segments.confidence, String(CHALLENGE_MAX_CONFIDENCE))
+        );
+      }
+      // "mixed" mode: no additional confidence filtering
     }
 
     // Only exclude already-reviewed segments if user is authenticated

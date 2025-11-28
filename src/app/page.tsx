@@ -6,8 +6,9 @@ import { TranscriptEditor } from "@/components/review/TranscriptEditor";
 import { OnboardingModal } from "@/components/review/OnboardingModal";
 import { FeedbackModal } from "@/components/review/FeedbackModal";
 import { AuthModal } from "@/components/review/AuthModal";
+import { ModeModal, type AnnotationMode } from "@/components/review/ModeModal";
 import { Button } from "@/components/ui/button";
-import { Loader2, Check, SkipForward, Headphones, ExternalLink, LogIn } from "lucide-react";
+import { Loader2, Check, SkipForward, Headphones, ExternalLink, LogIn, Settings2 } from "lucide-react";
 import type { SegmentWithSource, ReviewerSession, WordState } from "@/types/review";
 import type { WhisperWord } from "@/types/whisper";
 
@@ -38,7 +39,9 @@ export default function HomePage() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showModeModal, setShowModeModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
+  const [annotationMode, setAnnotationMode] = useState<AnnotationMode>("mixed");
 
   // Check session on mount (but don't redirect)
   useEffect(() => {
@@ -62,6 +65,12 @@ export default function HomePage() {
     if (!hasSeenOnboarding) {
       setShowOnboarding(true);
     }
+
+    // Load annotation mode preference
+    const savedMode = localStorage.getItem("selaou_annotation_mode") as AnnotationMode | null;
+    if (savedMode && ["mixed", "easy", "challenge"].includes(savedMode)) {
+      setAnnotationMode(savedMode);
+    }
   }, []);
 
   const handleCloseOnboarding = () => {
@@ -77,7 +86,8 @@ export default function HomePage() {
     try {
       const emailParam = session?.email ? `email=${encodeURIComponent(session.email)}` : "";
       const randomParam = random ? "random=true" : "";
-      const queryParams = [emailParam, randomParam].filter(Boolean).join("&");
+      const modeParam = `mode=${annotationMode}`;
+      const queryParams = [emailParam, randomParam, modeParam].filter(Boolean).join("&");
       const url = `/api/segments/next${queryParams ? `?${queryParams}` : ""}`;
       const res = await fetch(url);
 
@@ -127,7 +137,7 @@ export default function HomePage() {
     } finally {
       setIsLoading(false);
     }
-  }, [session?.email]);
+  }, [session?.email, annotationMode]);
 
   // Fetch segment on mount
   useEffect(() => {
@@ -210,6 +220,12 @@ export default function HomePage() {
       return;
     }
     setShowFeedback(true);
+  };
+
+  const handleModeChange = (mode: AnnotationMode) => {
+    setAnnotationMode(mode);
+    localStorage.setItem("selaou_annotation_mode", mode);
+    // fetchNextSegment will be triggered by the useEffect dependency on annotationMode
   };
 
   const handleFeedback = async (type: "audio_issue" | "remark", message?: string) => {
@@ -371,6 +387,15 @@ export default function HomePage() {
         />
       )}
 
+      {/* Mode Modal */}
+      {showModeModal && (
+        <ModeModal
+          currentMode={annotationMode}
+          onClose={() => setShowModeModal(false)}
+          onSelectMode={handleModeChange}
+        />
+      )}
+
       {/* Header */}
       <header className="bg-white border-b sticky top-0 z-40">
         <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
@@ -489,13 +514,21 @@ export default function HomePage() {
           </Button>
         </div>
 
-        {/* Feedback link */}
-        <div className="text-center mt-4">
+        {/* Feedback and mode links */}
+        <div className="flex items-center justify-center gap-4 mt-4">
           <button
             onClick={handleOpenFeedback}
             className="text-xs text-slate-400 hover:text-slate-600 transition-colors underline underline-offset-2"
           >
             Signaler un problème
+          </button>
+          <span className="text-slate-300">|</span>
+          <button
+            onClick={() => setShowModeModal(true)}
+            className="text-xs text-slate-400 hover:text-slate-600 transition-colors flex items-center gap-1"
+          >
+            <Settings2 className="h-3 w-3" />
+            Mode : {annotationMode === "mixed" ? "Mixte" : annotationMode === "easy" ? "Facile" : "Defi"}
           </button>
         </div>
       </main>
