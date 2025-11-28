@@ -1,103 +1,504 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { Headphones } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { AudioPlayer, AudioPlayerRef } from "@/components/audio/AudioPlayer";
+import { TranscriptEditor } from "@/components/review/TranscriptEditor";
+import { OnboardingModal } from "@/components/review/OnboardingModal";
+import { FeedbackModal } from "@/components/review/FeedbackModal";
+import { AuthModal } from "@/components/review/AuthModal";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
+import { Loader2, Check, SkipForward, Headphones, ExternalLink, LogIn } from "lucide-react";
+import type { SegmentWithSource, ReviewerSession, WordState } from "@/types/review";
+import type { WhisperWord } from "@/types/whisper";
+
+interface ReviewStats {
+  totalReviews: number;
+  totalCorrections: number;
+  remainingSegments: number;
+}
+
+type PendingAction =
+  | { type: "submit"; isCorrect: boolean }
+  | { type: "feedback" };
 
 export default function HomePage() {
-  const router = useRouter();
-  const [email, setEmail] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState("");
+  const audioPlayerRef = useRef<AudioPlayerRef>(null);
+  const [session, setSession] = useState<ReviewerSession | null>(null);
+  const [segment, setSegment] = useState<SegmentWithSource | null>(null);
+  const [words, setWords] = useState<WordState[]>([]);
+  const [stats, setStats] = useState<ReviewStats>({
+    totalReviews: 0,
+    totalCorrections: 0,
+    remainingSegments: 0,
+  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [segmentKey, setSegmentKey] = useState(0);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-
-    if (!email || !email.includes("@")) {
-      setError("Veuillez entrer une adresse email valide");
-      return;
+  // Check session on mount (but don't redirect)
+  useEffect(() => {
+    const sessionData = localStorage.getItem("selaou_session");
+    if (sessionData) {
+      try {
+        const parsed = JSON.parse(sessionData);
+        setSession({
+          email: parsed.email,
+          totalReviews: parsed.totalReviews || 0,
+          totalCorrections: parsed.totalCorrections || 0,
+        });
+      } catch {
+        // Invalid session, clear it
+        localStorage.removeItem("selaou_session");
+      }
     }
 
+    // Show onboarding for first-time users
+    const hasSeenOnboarding = localStorage.getItem("selaou_onboarding_seen");
+    if (!hasSeenOnboarding) {
+      setShowOnboarding(true);
+    }
+  }, []);
+
+  const handleCloseOnboarding = () => {
+    setShowOnboarding(false);
+    localStorage.setItem("selaou_onboarding_seen", "true");
+  };
+
+  // Fetch next segment
+  const fetchNextSegment = useCallback(async (random = false) => {
     setIsLoading(true);
+    setError(null);
 
     try {
-      // Store email in localStorage for session persistence
-      localStorage.setItem(
-        "selaou_session",
-        JSON.stringify({
-          email,
-          startedAt: new Date().toISOString(),
-        })
-      );
+      const emailParam = session?.email ? `email=${encodeURIComponent(session.email)}` : "";
+      const randomParam = random ? "random=true" : "";
+      const queryParams = [emailParam, randomParam].filter(Boolean).join("&");
+      const url = `/api/segments/next${queryParams ? `?${queryParams}` : ""}`;
+      const res = await fetch(url);
 
-      // Navigate to review page
-      router.push("/review");
-    } catch {
-      setError("Une erreur est survenue. Veuillez réessayer.");
+      if (!res.ok) {
+        throw new Error("Erreur lors du chargement du segment");
+      }
+
+      const data = await res.json();
+
+      if (data.segment) {
+        setSegment(data.segment);
+        setSegmentKey((k) => k + 1);
+
+        const whisperData = data.segment.whisperWords as WhisperWord[] | undefined;
+        if (whisperData && Array.isArray(whisperData)) {
+          setWords(
+            whisperData.map((w: WhisperWord, idx: number) => ({
+              index: idx,
+              original: w.word.trim(),
+              current: w.word.trim(),
+              isModified: false,
+              confidence: w.probability,
+              startTime: w.start,
+              endTime: w.end,
+            }))
+          );
+        } else {
+          const textWords = data.segment.text.split(/\s+/).filter(Boolean);
+          setWords(
+            textWords.map((w: string, idx: number) => ({
+              index: idx,
+              original: w,
+              current: w,
+              isModified: false,
+              confidence: 0.8,
+            }))
+          );
+        }
+      } else {
+        setSegment(null);
+        setWords([]);
+      }
+
+      setStats(data.stats);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur inconnue");
     } finally {
       setIsLoading(false);
     }
+  }, [session?.email]);
+
+  // Fetch segment on mount
+  useEffect(() => {
+    fetchNextSegment();
+  }, [fetchNextSegment]);
+
+  // Handle word update
+  const handleWordUpdate = (index: number, newValue: string) => {
+    setWords((prev) =>
+      prev.map((w) =>
+        w.index === index
+          ? { ...w, current: newValue, isModified: newValue !== w.original }
+          : w
+      )
+    );
   };
 
-  return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-            <Headphones className="h-8 w-8 text-primary" />
+  const hasModifications = words.some((w) => w.isModified);
+
+  // Submit review
+  const handleSubmit = async (isCorrect: boolean) => {
+    if (!segment) return;
+
+    // If not authenticated, show auth modal and save pending action
+    if (!session?.email) {
+      setPendingAction({ type: "submit", isCorrect });
+      setShowAuthModal(true);
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const correctedWords = words
+        .filter((w) => w.isModified)
+        .map((w) => ({
+          index: w.index,
+          original: w.original,
+          corrected: w.current,
+        }));
+
+      const correctedText = hasModifications
+        ? words.map((w) => w.current).join(" ")
+        : undefined;
+
+      const res = await fetch("/api/reviews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          segmentId: segment.id,
+          reviewerEmail: session.email,
+          isCorrect,
+          correctedText,
+          correctedWords: correctedWords.length > 0 ? correctedWords : undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Erreur lors de la soumission");
+      }
+
+      // Fetch next segment (stats will be updated from API response)
+      await fetchNextSegment();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur inconnue");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSkip = () => {
+    fetchNextSegment(true);
+  };
+
+  const handleOpenFeedback = () => {
+    // If not authenticated, show auth modal first
+    if (!session?.email) {
+      setPendingAction({ type: "feedback" });
+      setShowAuthModal(true);
+      return;
+    }
+    setShowFeedback(true);
+  };
+
+  const handleFeedback = async (type: "audio_issue" | "remark", message?: string) => {
+    if (!session?.email || !segment) return;
+
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          segmentId: segment.id,
+          reviewerEmail: session.email,
+          type,
+          message,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Erreur lors de l'envoi du feedback");
+      }
+
+      // Fetch next segment after feedback
+      await fetchNextSegment(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur inconnue");
+    }
+  };
+
+  // Handle authentication
+  const handleAuthenticate = (email: string) => {
+    setSession({
+      email,
+      totalReviews: 0,
+      totalCorrections: 0,
+    });
+    setShowAuthModal(false);
+
+    // Execute pending action if any
+    if (pendingAction) {
+      if (pendingAction.type === "submit") {
+        // We need to manually call the submit with the email since state hasn't updated yet
+        submitWithEmail(email, pendingAction.isCorrect);
+      } else if (pendingAction.type === "feedback") {
+        setShowFeedback(true);
+      }
+      setPendingAction(null);
+    }
+  };
+
+  // Helper to submit with a specific email (used after auth)
+  const submitWithEmail = async (email: string, isCorrect: boolean) => {
+    if (!segment) return;
+
+    setIsSubmitting(true);
+
+    try {
+      const correctedWords = words
+        .filter((w) => w.isModified)
+        .map((w) => ({
+          index: w.index,
+          original: w.original,
+          corrected: w.current,
+        }));
+
+      const correctedText = hasModifications
+        ? words.map((w) => w.current).join(" ")
+        : undefined;
+
+      const res = await fetch("/api/reviews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          segmentId: segment.id,
+          reviewerEmail: email,
+          isCorrect,
+          correctedText,
+          correctedWords: correctedWords.length > 0 ? correctedWords : undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error("Erreur lors de la soumission");
+      }
+
+      await fetchNextSegment();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erreur inconnue");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Loading state
+  if (isLoading && !segment) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <Loader2 className="h-10 w-10 animate-spin text-blue-500 mx-auto mb-4" />
+          <p className="text-slate-500">Chargement...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if (error) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-50">
+        <div className="text-center">
+          <p className="text-lg text-red-600 mb-4">{error}</p>
+          <Button onClick={() => fetchNextSegment()}>Reessayer</Button>
+        </div>
+      </div>
+    );
+  }
+
+  // No more segments
+  if (!segment) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-slate-50 p-4">
+        <div className="text-center">
+          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <Check className="h-10 w-10 text-green-600" />
           </div>
-          <CardTitle className="text-3xl font-bold">Selaou</CardTitle>
-          <p className="mt-2 text-muted-foreground">
-            Aidez a ameliorer la transcription audio
+          <h1 className="text-3xl font-bold text-slate-900 mb-2">Merci !</h1>
+          <p className="text-slate-500 mb-6">
+            Plus de segments a annoter pour le moment.
           </p>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Votre email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="vous@exemple.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                disabled={isLoading}
-                required
-              />
-              {error && <p className="text-sm text-destructive">{error}</p>}
-            </div>
-            <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? "Chargement..." : "Commencer"}
-            </Button>
-          </form>
-
-          <div className="mt-6 border-t pt-4">
-            <p className="text-center text-sm text-muted-foreground">
-              Ecoutez des extraits audio et validez ou corrigez la transcription
-              automatique.
-            </p>
+          <div className="bg-white rounded-xl p-6 shadow-sm border">
+            <p className="text-2xl font-bold text-slate-900">{stats.totalReviews}</p>
+            <p className="text-slate-500 text-sm">annotations effectuees</p>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+    );
+  }
 
-      <footer className="mt-8 text-center text-sm text-muted-foreground">
-        <p>
-          Projet open source -{" "}
-          <a
-            href="https://github.com/Synapsr/Selaou"
-            className="underline hover:text-foreground"
-            target="_blank"
-            rel="noopener noreferrer"
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Onboarding Modal */}
+      {showOnboarding && <OnboardingModal onClose={handleCloseOnboarding} />}
+
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <AuthModal
+          onClose={() => {
+            setShowAuthModal(false);
+            setPendingAction(null);
+          }}
+          onAuthenticate={handleAuthenticate}
+        />
+      )}
+
+      {/* Feedback Modal */}
+      {showFeedback && (
+        <FeedbackModal
+          onClose={() => setShowFeedback(false)}
+          onSubmit={handleFeedback}
+        />
+      )}
+
+      {/* Header */}
+      <header className="bg-white border-b sticky top-0 z-40">
+        <div className="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Headphones className="h-5 w-5 text-blue-500" />
+            <span className="font-semibold text-slate-900">Selaou</span>
+          </div>
+          {session?.email ? (
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-slate-500">Vos annotations :</span>
+              <span className="font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                {stats.totalReviews}
+              </span>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors"
+            >
+              <LogIn className="h-4 w-4" />
+              Me connecter
+            </button>
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto px-4 py-6">
+        {/* Transcript - Priority content */}
+        <div className="bg-white rounded-2xl border shadow-sm p-6 mb-4">
+          <p className="text-xs text-slate-400 mb-3 uppercase tracking-wide">
+            Transcription a verifier
+          </p>
+          <TranscriptEditor words={words} onWordUpdate={handleWordUpdate} />
+          <p className="text-xs text-slate-400 mt-4">
+            Cliquez sur un mot pour le corriger
+          </p>
+        </div>
+
+        {/* Audio Player - Compact */}
+        <div className="mb-4">
+          <AudioPlayer
+            key={segmentKey}
+            ref={audioPlayerRef}
+            audioUrl={segment.audioSource.audioUrl}
+            startTime={parseFloat(segment.startTime)}
+            endTime={parseFloat(segment.endTime)}
+            autoPlay={true}
+          />
+        </div>
+
+        {/* Episode info */}
+        <div className="text-xs text-slate-400 text-center mb-6 flex items-center justify-center gap-2">
+          <span className="truncate">{segment.audioSource.name}</span>
+          {segment.audioSource.sourceUrl && (
+            <>
+              <span>•</span>
+              <a
+                href={`${segment.audioSource.sourceUrl}#t=${Math.floor(parseFloat(segment.startTime))}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-500 hover:text-blue-600 transition-colors inline-flex items-center gap-1"
+              >
+                Source
+                <ExternalLink className="h-3 w-3" />
+              </a>
+            </>
+          )}
+        </div>
+
+        {/* Actions - Clear buttons */}
+        <div className="flex gap-3">
+          {!hasModifications ? (
+            <Button
+              size="lg"
+              onClick={() => handleSubmit(true)}
+              disabled={isSubmitting}
+              className="flex-1 h-14 text-base bg-green-600 hover:bg-green-700"
+            >
+              {isSubmitting ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <>
+                  <Check className="h-5 w-5 mr-2" />
+                  C&apos;est correct
+                </>
+              )}
+            </Button>
+          ) : (
+            <Button
+              size="lg"
+              onClick={() => handleSubmit(false)}
+              disabled={isSubmitting}
+              className="flex-1 h-14 text-base bg-blue-600 hover:bg-blue-700"
+            >
+              {isSubmitting ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <>
+                  <Check className="h-5 w-5 mr-2" />
+                  Envoyer mes corrections
+                </>
+              )}
+            </Button>
+          )}
+
+          <Button
+            size="lg"
+            variant="outline"
+            onClick={handleSkip}
+            disabled={isSubmitting}
+            className="h-14 px-4 text-slate-500"
+            title="Passer ce segment"
           >
-            GitHub
-          </a>
-        </p>
-      </footer>
-    </main>
+            <SkipForward className="h-5 w-5" />
+            <span className="ml-2 hidden sm:inline">Passer</span>
+          </Button>
+        </div>
+
+        {/* Feedback link */}
+        <div className="text-center mt-4">
+          <button
+            onClick={handleOpenFeedback}
+            className="text-xs text-slate-400 hover:text-slate-600 transition-colors underline underline-offset-2"
+          >
+            Signaler un problème
+          </button>
+        </div>
+      </main>
+    </div>
   );
 }

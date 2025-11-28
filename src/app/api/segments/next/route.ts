@@ -13,23 +13,25 @@ export async function GET(request: NextRequest) {
   const email = searchParams.get("email");
   const random = searchParams.get("random") === "true";
 
-  if (!email) {
-    return NextResponse.json({ error: "Email required" }, { status: 400 });
-  }
-
   try {
-    // Get or create reviewer
-    let reviewer = await db.query.reviewers.findFirst({
-      where: eq(schema.reviewers.email, email),
-    });
+    // Get or create reviewer (only if email provided)
+    let reviewer: { id: string; email: string; reviewCount: number; correctionCount: number } | null = null;
 
-    if (!reviewer) {
-      const id = uuid();
-      await db.insert(schema.reviewers).values({
-        id,
-        email,
+    if (email) {
+      const existingReviewer = await db.query.reviewers.findFirst({
+        where: eq(schema.reviewers.email, email),
       });
-      reviewer = { id, email, reviewCount: 0, correctionCount: 0, createdAt: new Date(), lastReviewAt: null };
+
+      if (!existingReviewer) {
+        const id = uuid();
+        await db.insert(schema.reviewers).values({
+          id,
+          email,
+        });
+        reviewer = { id, email, reviewCount: 0, correctionCount: 0 };
+      } else {
+        reviewer = existingReviewer;
+      }
     }
 
     // Select next segment
@@ -38,6 +40,40 @@ export async function GET(request: NextRequest) {
     const orderClause = random
       ? sql`RAND()`
       : sql`((1 - ${schema.segments.confidence}) * ${UNCERTAINTY_WEIGHT} + RAND() * ${1 - UNCERTAINTY_WEIGHT}) DESC`;
+
+    // Build where conditions
+    const whereConditions = [
+      lt(schema.segments.reviewCount, MAX_REVIEWS),
+      // Exclude segments with audio_issue alerts
+      notExists(
+        db
+          .select({ one: sql`1` })
+          .from(schema.segmentFeedback)
+          .where(
+            and(
+              eq(schema.segmentFeedback.segmentId, schema.segments.id),
+              eq(schema.segmentFeedback.type, "audio_issue")
+            )
+          )
+      )
+    ];
+
+    // Only exclude already-reviewed segments if user is authenticated
+    if (reviewer) {
+      whereConditions.push(
+        notExists(
+          db
+            .select({ one: sql`1` })
+            .from(schema.reviews)
+            .where(
+              and(
+                eq(schema.reviews.segmentId, schema.segments.id),
+                eq(schema.reviews.reviewerId, reviewer.id)
+              )
+            )
+        )
+      );
+    }
 
     const segments = await db
       .select({
@@ -51,35 +87,7 @@ export async function GET(request: NextRequest) {
         reviewCount: schema.segments.reviewCount,
       })
       .from(schema.segments)
-      .where(
-        and(
-          lt(schema.segments.reviewCount, MAX_REVIEWS),
-          // Exclude segments already reviewed by this user
-          notExists(
-            db
-              .select({ one: sql`1` })
-              .from(schema.reviews)
-              .where(
-                and(
-                  eq(schema.reviews.segmentId, schema.segments.id),
-                  eq(schema.reviews.reviewerId, reviewer.id)
-                )
-              )
-          ),
-          // Exclude segments with audio_issue alerts
-          notExists(
-            db
-              .select({ one: sql`1` })
-              .from(schema.segmentFeedback)
-              .where(
-                and(
-                  eq(schema.segmentFeedback.segmentId, schema.segments.id),
-                  eq(schema.segmentFeedback.type, "audio_issue")
-                )
-              )
-          )
-        )
-      )
+      .where(and(...whereConditions))
       .orderBy(orderClause)
       .limit(1);
 
@@ -93,8 +101,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({
         segment: null,
         stats: {
-          totalReviews: reviewer.reviewCount,
-          totalCorrections: reviewer.correctionCount,
+          totalReviews: reviewer?.reviewCount || 0,
+          totalCorrections: reviewer?.correctionCount || 0,
           remainingSegments: remainingResult[0]?.count || 0,
         },
       });
@@ -154,8 +162,8 @@ export async function GET(request: NextRequest) {
         },
       },
       stats: {
-        totalReviews: reviewer.reviewCount,
-        totalCorrections: reviewer.correctionCount,
+        totalReviews: reviewer?.reviewCount || 0,
+        totalCorrections: reviewer?.correctionCount || 0,
         remainingSegments: remainingResult[0]?.count || 0,
       },
     });
