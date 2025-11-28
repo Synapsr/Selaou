@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
-import { eq, sql, and, notExists, lt } from "drizzle-orm";
+import { eq, sql, and, notExists, lt, gt, gte, lte } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 
 const UNCERTAINTY_WEIGHT = parseFloat(
   process.env.SELECTION_UNCERTAINTY_WEIGHT || "0.7"
 );
 const MAX_REVIEWS = parseInt(process.env.SELECTION_MAX_REVIEWS || "3", 10);
+
+// Minimum segment quality thresholds
+const MIN_SEGMENT_DURATION = 2.0; // seconds
+const MIN_TEXT_LENGTH = 10; // characters
+
+// For anonymous users, target medium confidence for better first impression
+const ANONYMOUS_MIN_CONFIDENCE = 0.5;
+const ANONYMOUS_MAX_CONFIDENCE = 0.9;
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -35,15 +43,29 @@ export async function GET(request: NextRequest) {
     }
 
     // Select next segment
-    // If random=true, use pure random selection (useful after skip)
-    // Otherwise, use weighted selection: Priority = (1 - confidence) * weight + random * (1 - weight)
-    const orderClause = random
-      ? sql`RAND()`
-      : sql`((1 - ${schema.segments.confidence}) * ${UNCERTAINTY_WEIGHT} + RAND() * ${1 - UNCERTAINTY_WEIGHT}) DESC`;
+    // For anonymous users: use random selection with medium confidence for better first impression
+    // For authenticated users: prioritize uncertain segments
+    // If random=true (skip): use pure random selection
+    const isAnonymous = !reviewer;
+
+    let orderClause;
+    if (random) {
+      orderClause = sql`RAND()`;
+    } else if (isAnonymous) {
+      // For anonymous users, just use random within the filtered confidence range
+      orderClause = sql`RAND()`;
+    } else {
+      // For authenticated users, prioritize uncertain segments
+      orderClause = sql`((1 - ${schema.segments.confidence}) * ${UNCERTAINTY_WEIGHT} + RAND() * ${1 - UNCERTAINTY_WEIGHT}) DESC`;
+    }
 
     // Build where conditions
     const whereConditions = [
       lt(schema.segments.reviewCount, MAX_REVIEWS),
+      // Minimum segment duration (endTime - startTime >= MIN_SEGMENT_DURATION)
+      sql`(${schema.segments.endTime} - ${schema.segments.startTime}) >= ${MIN_SEGMENT_DURATION}`,
+      // Minimum text length
+      sql`CHAR_LENGTH(${schema.segments.text}) >= ${MIN_TEXT_LENGTH}`,
       // Exclude segments with audio_issue alerts
       notExists(
         db
@@ -57,6 +79,14 @@ export async function GET(request: NextRequest) {
           )
       )
     ];
+
+    // For anonymous users, filter to medium confidence range for better first impression
+    if (isAnonymous) {
+      whereConditions.push(
+        gte(schema.segments.confidence, String(ANONYMOUS_MIN_CONFIDENCE)),
+        lte(schema.segments.confidence, String(ANONYMOUS_MAX_CONFIDENCE))
+      );
+    }
 
     // Only exclude already-reviewed segments if user is authenticated
     if (reviewer) {
