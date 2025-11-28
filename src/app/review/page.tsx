@@ -324,7 +324,7 @@ export default function ReviewPage() {
             <>
               <span>•</span>
               <a
-                href={segment.audioSource.sourceUrl}
+                href={`${segment.audioSource.sourceUrl}#t=${Math.floor(parseFloat(segment.startTime))}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-blue-500 hover:text-blue-600 transition-colors inline-flex items-center gap-1"

@@ -18,6 +18,7 @@ import {
   FileJson,
   Table,
   Archive,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -729,13 +730,27 @@ export default function AdminPage() {
                                   (parseFloat(segment.endTime) - parseFloat(segment.startTime)) * 1000
                                 );
                               }}
+                              title="Écouter le segment"
                             >
                               <Play className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const startSeconds = Math.floor(parseFloat(segment.startTime));
+                                const url = `${segment.audioUrl}#t=${startSeconds}`;
+                                window.open(url, "_blank");
+                              }}
+                              title={`Ouvrir la source à ${segment.startTime}s`}
+                            >
+                              <ExternalLink className="h-3 w-3" />
                             </Button>
                             <Button
                               variant="destructive"
                               size="sm"
                               onClick={() => deleteSegment(segment.id)}
+                              title="Supprimer le segment"
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>

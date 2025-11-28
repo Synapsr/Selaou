@@ -89,7 +89,7 @@ export default function HomePage() {
         <p>
           Projet open source -{" "}
           <a
-            href="https://github.com/your-repo/selaou"
+            href="https://github.com/Synapsr/Selaou"
             className="underline hover:text-foreground"
             target="_blank"
             rel="noopener noreferrer"
