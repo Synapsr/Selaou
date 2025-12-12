@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
-import { eq, sql, and, notExists, lt, gt, gte, lte } from "drizzle-orm";
+import { eq, sql, and, notExists, lt, gte, lte } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
 
 const UNCERTAINTY_WEIGHT = parseFloat(
