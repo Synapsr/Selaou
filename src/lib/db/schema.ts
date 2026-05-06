@@ -55,6 +55,8 @@ export const reviewers = mysqlTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     email: varchar("email", { length: 255 }).unique().notNull(),
+    displayName: varchar("display_name", { length: 100 }).unique(),
+    isPublic: boolean("is_public").default(true).notNull(),
     reviewCount: int("review_count").default(0).notNull(),
     correctionCount: int("correction_count").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow(),
@@ -62,6 +64,7 @@ export const reviewers = mysqlTable(
   },
   (table) => ({
     emailIdx: index("email_idx").on(table.email),
+    displayNameIdx: index("display_name_idx").on(table.displayName),
   })
 );
 

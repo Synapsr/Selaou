@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
+import { generateUniqueDisplayName } from "@/lib/display-name";
 
 export async function POST(request: NextRequest) {
   try {
@@ -31,11 +32,22 @@ export async function POST(request: NextRequest) {
 
     if (!reviewer) {
       const id = uuid();
+      const displayName = await generateUniqueDisplayName(reviewerEmail);
       await db.insert(schema.reviewers).values({
         id,
         email: reviewerEmail,
+        displayName,
       });
-      reviewer = { id, email: reviewerEmail, reviewCount: 0, correctionCount: 0, createdAt: new Date(), lastReviewAt: null };
+      reviewer = {
+        id,
+        email: reviewerEmail,
+        displayName,
+        isPublic: true,
+        reviewCount: 0,
+        correctionCount: 0,
+        createdAt: new Date(),
+        lastReviewAt: null,
+      };
     }
 
     // Create feedback

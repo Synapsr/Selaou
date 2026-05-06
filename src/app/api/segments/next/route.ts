@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, sql, and, notExists, lt, gte, lte } from "drizzle-orm";
 import { v4 as uuid } from "uuid";
+import { generateUniqueDisplayName } from "@/lib/display-name";
 
 const UNCERTAINTY_WEIGHT = parseFloat(
   process.env.SELECTION_UNCERTAINTY_WEIGHT || "0.7"
@@ -37,13 +38,23 @@ export async function GET(request: NextRequest) {
 
       if (!existingReviewer) {
         const id = uuid();
+        const displayName = await generateUniqueDisplayName(email);
         await db.insert(schema.reviewers).values({
           id,
           email,
+          displayName,
         });
         reviewer = { id, email, reviewCount: 0, correctionCount: 0 };
       } else {
         reviewer = existingReviewer;
+        // Backfill displayName for legacy reviewers who don't have one yet
+        if (!existingReviewer.displayName) {
+          const displayName = await generateUniqueDisplayName(email);
+          await db
+            .update(schema.reviewers)
+            .set({ displayName })
+            .where(eq(schema.reviewers.id, existingReviewer.id));
+        }
       }
     }
 

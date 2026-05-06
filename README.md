@@ -11,6 +11,9 @@ Selaou permet de valider et corriger des transcriptions audio (format Whisper) v
 - Correction mot par mot avec indication de confiance
 - Sélection intelligente des segments (priorise les segments incertains)
 - Système de feedback pour signaler les problèmes audio
+- **Espace personnel** (`/me`) avec stats détaillées, heatmap d'activité et étapes franchies
+- **Classement public** (`/contributeurs`) des annotateurs sur 7 jours, 30 jours ou depuis le début
+- Pseudo public auto-généré avec opt-out du classement
 - Export JSONL/CSV compatible HuggingFace
 - Système d'import flexible (SQL, fichiers JSON, API)
 - **Interface d'administration** sécurisée par token
@@ -219,6 +222,9 @@ Voir `.env.example` pour toutes les options.
 | `/api/feedback` | POST | Signaler un problème sur un segment |
 | `/api/export` | GET | Exporter les données |
 | `/api/stats` | GET | Statistiques globales |
+| `/api/me/stats` | GET | Stats détaillées de l'annotateur connecté (heatmap, étapes…) |
+| `/api/me/settings` | PATCH | Mise à jour du pseudo public et de l'opt-in classement |
+| `/api/leaderboard` | GET | Classement public (`?period=week\|month\|all`) |
 
 ### Routes admin (token requis)
 
@@ -241,11 +247,38 @@ Les contributions sont les bienvenues ! N'hésitez pas à ouvrir une issue ou un
 4. Push (`git push origin feature/amélioration`)
 5. Ouvrir une Pull Request
 
+## Migrations de base de données
+
+Selaou utilise [Drizzle ORM](https://orm.drizzle.team/) pour gérer le schéma. Les migrations sont versionnées dans `src/lib/db/migrations/`.
+
+### Sur une instance fraîche (fork)
+
+```bash
+npm run db:migrate
+```
+
+Toutes les migrations seront appliquées dans l'ordre.
+
+### Sur une instance qui a bootstrappé via `db:push`
+
+`db:push` synchronise le schéma sans créer d'entrée dans `__drizzle_migrations`. Si vous mettez à jour une telle instance, certaines migrations peuvent échouer parce que les tables existent déjà. Dans ce cas, appliquez manuellement uniquement les ALTER TABLE pertinents :
+
+```sql
+-- Pour la migration 0001_public_profiles (mise à jour vers les profils publics) :
+ALTER TABLE reviewers ADD COLUMN display_name varchar(100) NULL;
+ALTER TABLE reviewers ADD COLUMN is_public boolean NOT NULL DEFAULT true;
+ALTER TABLE reviewers ADD CONSTRAINT reviewers_display_name_unique UNIQUE(display_name);
+CREATE INDEX display_name_idx ON reviewers (display_name);
+```
+
+Le `display_name` est nullable et auto-généré par l'API au prochain login (backfill paresseux), donc aucune donnée n'est perdue.
+
 ## Roadmap
 
-- [ ] Interface de connexion avec authentification par email
+- [x] Authentification lazy par email
+- [x] Espace personnel et classement public
 - [ ] Système de vérification d'email pour les annotateurs
-- [ ] Dashboard de statistiques avancées
+- [ ] Dashboard de statistiques avancées (admin)
 - [ ] Support multi-langues
 
 ## Licence

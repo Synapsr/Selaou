@@ -184,9 +184,12 @@ export const AudioPlayer = forwardRef<AudioPlayerRef, AudioPlayerProps>(
 
         {/* Play/Pause button */}
         <button
+          data-shortcut="toggle-play"
           onClick={togglePlay}
           disabled={!isReady}
           className="flex-shrink-0 h-10 w-10 rounded-full bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700 transition-colors disabled:opacity-50"
+          aria-label={isPlaying ? "Pause" : "Lecture"}
+          title="Lecture / Pause (Espace)"
         >
           {isPlaying ? (
             <Pause className="h-5 w-5" />
