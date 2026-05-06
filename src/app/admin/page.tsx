@@ -1,123 +1,91 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { toast } from "sonner";
 import {
   Shield,
   Users,
   FileText,
   AlertTriangle,
   MessageSquare,
-  Trash2,
   RefreshCw,
   LogOut,
-  ChevronDown,
-  ChevronUp,
-  Play,
   Download,
   Database,
   FileJson,
   Table,
   Archive,
-  ExternalLink,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-
-interface Reviewer {
-  id: string;
-  email: string;
-  reviewCount: number;
-  correctionCount: number;
-  createdAt: string;
-  lastReviewAt: string | null;
-}
-
-interface Review {
-  id: string;
-  segmentId: string;
-  reviewerId: string;
-  isCorrect: boolean;
-  correctedText: string | null;
-  createdAt: string;
-  reviewerEmail: string;
-  segmentText: string;
-  audioSourceName: string;
-}
-
-interface Feedback {
-  id: string;
-  segmentId: string;
-  reviewerId: string;
-  type: string;
-  message: string | null;
-  createdAt: string;
-  reviewerEmail: string;
-  segmentText: string;
-  audioSourceName: string;
-  audioSourceId: string;
-}
-
-interface Segment {
-  id: string;
-  audioSourceId: string;
-  segmentIndex: number;
-  startTime: string;
-  endTime: string;
-  text: string;
-  confidence: string;
-  reviewCount: number;
-  audioSourceName: string;
-  audioUrl: string;
-}
+import { AdminTabs, type AdminTabDef } from "@/components/admin/AdminTabs";
+import { StatsOverview, type AdminOverview } from "@/components/admin/StatsOverview";
+import { ReviewersTable, type ReviewerRow } from "@/components/admin/ReviewersTable";
+import { ReviewsList, type ReviewRow } from "@/components/admin/ReviewsList";
+import { FeedbackList, type FeedbackRow } from "@/components/admin/FeedbackList";
+import { SegmentsTable, type SegmentRow } from "@/components/admin/SegmentsTable";
 
 type Tab = "reviewers" | "reviews" | "feedback" | "segments" | "export";
+type ReviewerSortField = "reviewCount" | "correctionCount" | "createdAt" | "lastReviewAt";
+type SegmentSortField = "reviewCount" | "confidence";
 type SortOrder = "asc" | "desc";
 type ExportFormat = "json" | "csv" | "jsonl";
 
 export default function AdminPage() {
+  const prefersReducedMotion = useReducedMotion();
+
   const [token, setToken] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("reviewers");
 
-  // Data states
-  const [reviewers, setReviewers] = useState<Reviewer[]>([]);
-  const [reviews, setReviews] = useState<Review[]>([]);
-  const [feedback, setFeedback] = useState<Feedback[]>([]);
-  const [segments, setSegments] = useState<Segment[]>([]);
-  const [feedbackCounts, setFeedbackCounts] = useState<Record<string, number>>({});
+  // Data
+  const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [reviewers, setReviewers] = useState<ReviewerRow[]>([]);
+  const [reviews, setReviews] = useState<ReviewRow[]>([]);
+  const [feedback, setFeedback] = useState<FeedbackRow[]>([]);
+  const [segments, setSegments] = useState<SegmentRow[]>([]);
+  const [feedbackCounts, setFeedbackCounts] = useState<{ audio_issue: number; remark: number }>({
+    audio_issue: 0,
+    remark: 0,
+  });
 
-  // Sorting states
-  const [reviewerSort, setReviewerSort] = useState<{ field: string; order: SortOrder }>({
+  const [isFetching, setIsFetching] = useState(false);
+  const [reviewerSort, setReviewerSort] = useState<{ field: ReviewerSortField; order: SortOrder }>({
     field: "reviewCount",
     order: "desc",
   });
-  const [segmentSort, setSegmentSort] = useState<{ field: string; order: SortOrder }>({
+  const [segmentSort, setSegmentSort] = useState<{ field: SegmentSortField; order: SortOrder }>({
     field: "reviewCount",
     order: "desc",
   });
-
-  // Filter states
   const [feedbackFilter, setFeedbackFilter] = useState<string>("");
 
-  // Check for stored token on mount
+  // Token bootstrap
   useEffect(() => {
     const storedToken = localStorage.getItem("selaou_admin_token");
     if (storedToken) {
-      setToken(storedToken);
       verifyToken(storedToken);
+    } else {
+      setAuthChecking(false);
     }
   }, []);
 
   const verifyToken = async (tokenToVerify: string) => {
-    setIsLoading(true);
+    setAuthChecking(true);
     setError("");
     try {
-      const response = await fetch(`/api/admin/reviewers?token=${tokenToVerify}&limit=1`);
-      if (response.ok) {
+      const res = await fetch(
+        `/api/admin/overview?token=${encodeURIComponent(tokenToVerify)}`
+      );
+      if (res.ok) {
+        const data = (await res.json()) as AdminOverview;
+        setOverview(data);
+        setToken(tokenToVerify);
         setIsAuthenticated(true);
         localStorage.setItem("selaou_admin_token", tokenToVerify);
       } else {
@@ -127,7 +95,7 @@ export default function AdminPage() {
     } catch {
       setError("Erreur de connexion");
     } finally {
-      setIsLoading(false);
+      setAuthChecking(false);
     }
   };
 
@@ -139,89 +107,100 @@ export default function AdminPage() {
   const handleLogout = () => {
     setIsAuthenticated(false);
     setToken("");
+    setOverview(null);
     localStorage.removeItem("selaou_admin_token");
   };
 
-  const fetchReviewers = useCallback(async () => {
-    setIsLoading(true);
+  const refreshOverview = useCallback(async () => {
     try {
-      const response = await fetch(
-        `/api/admin/reviewers?token=${token}&sort=${reviewerSort.field}&order=${reviewerSort.order}`
+      const res = await fetch(`/api/admin/overview?token=${encodeURIComponent(token)}`);
+      if (res.ok) setOverview(await res.json());
+    } catch {
+      // silent
+    }
+  }, [token]);
+
+  const fetchReviewers = useCallback(async () => {
+    setIsFetching(true);
+    try {
+      const res = await fetch(
+        `/api/admin/reviewers?token=${encodeURIComponent(token)}&sort=${reviewerSort.field}&order=${reviewerSort.order}`
       );
-      const data = await response.json();
+      const data = await res.json();
       setReviewers(data.reviewers || []);
     } catch {
-      setError("Erreur lors du chargement des annotateurs");
+      toast.error("Erreur lors du chargement des annotateurs");
     } finally {
-      setIsLoading(false);
+      setIsFetching(false);
     }
   }, [token, reviewerSort]);
 
   const fetchReviews = useCallback(async () => {
-    setIsLoading(true);
+    setIsFetching(true);
     try {
-      const response = await fetch(`/api/admin/reviews?token=${token}`);
-      const data = await response.json();
+      const res = await fetch(`/api/admin/reviews?token=${encodeURIComponent(token)}&limit=200`);
+      const data = await res.json();
       setReviews(data.reviews || []);
     } catch {
-      setError("Erreur lors du chargement des annotations");
+      toast.error("Erreur lors du chargement des annotations");
     } finally {
-      setIsLoading(false);
+      setIsFetching(false);
     }
   }, [token]);
 
   const fetchFeedback = useCallback(async () => {
-    setIsLoading(true);
+    setIsFetching(true);
     try {
       const typeParam = feedbackFilter ? `&type=${feedbackFilter}` : "";
-      const response = await fetch(`/api/admin/feedback?token=${token}${typeParam}`);
-      const data = await response.json();
+      const res = await fetch(`/api/admin/feedback?token=${encodeURIComponent(token)}${typeParam}`);
+      const data = await res.json();
       setFeedback(data.feedback || []);
-      setFeedbackCounts(data.typeCounts || {});
+      setFeedbackCounts(data.typeCounts || { audio_issue: 0, remark: 0 });
     } catch {
-      setError("Erreur lors du chargement des remarques");
+      toast.error("Erreur lors du chargement des remarques");
     } finally {
-      setIsLoading(false);
+      setIsFetching(false);
     }
   }, [token, feedbackFilter]);
 
   const fetchSegments = useCallback(async () => {
-    setIsLoading(true);
+    setIsFetching(true);
     try {
-      const response = await fetch(
-        `/api/admin/segments?token=${token}&sort=${segmentSort.field}&order=${segmentSort.order}&minReviews=1`
+      const res = await fetch(
+        `/api/admin/segments?token=${encodeURIComponent(token)}&sort=${segmentSort.field}&order=${segmentSort.order}&minReviews=1`
       );
-      const data = await response.json();
+      const data = await res.json();
       setSegments(data.segments || []);
     } catch {
-      setError("Erreur lors du chargement des segments");
+      toast.error("Erreur lors du chargement des segments");
     } finally {
-      setIsLoading(false);
+      setIsFetching(false);
     }
   }, [token, segmentSort]);
 
   const deleteSegment = async (segmentId: string) => {
     if (!confirm("Supprimer ce segment et toutes ses annotations ?")) return;
-
     try {
-      const response = await fetch(`/api/admin/segments/${segmentId}?token=${token}`, {
-        method: "DELETE",
-      });
-      if (response.ok) {
-        setSegments(segments.filter((s) => s.id !== segmentId));
-        setFeedback(feedback.filter((f) => f.segmentId !== segmentId));
+      const res = await fetch(
+        `/api/admin/segments/${segmentId}?token=${encodeURIComponent(token)}`,
+        { method: "DELETE" }
+      );
+      if (res.ok) {
+        setSegments((prev) => prev.filter((s) => s.id !== segmentId));
+        setFeedback((prev) => prev.filter((f) => f.segmentId !== segmentId));
+        toast.success("Segment supprimé");
+        refreshOverview();
       } else {
-        setError("Erreur lors de la suppression");
+        toast.error("Erreur lors de la suppression");
       }
     } catch {
-      setError("Erreur lors de la suppression");
+      toast.error("Erreur lors de la suppression");
     }
   };
 
-  // Fetch data when tab changes
+  // Tab data fetching
   useEffect(() => {
     if (!isAuthenticated) return;
-
     switch (activeTab) {
       case "reviewers":
         fetchReviewers();
@@ -238,548 +217,198 @@ export default function AdminPage() {
     }
   }, [isAuthenticated, activeTab, fetchReviewers, fetchReviews, fetchFeedback, fetchSegments]);
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return "-";
-    return new Date(dateString).toLocaleDateString("fr-FR", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const SortButton = ({
-    field,
-    currentSort,
-    onSort,
-    children,
-  }: {
-    field: string;
-    currentSort: { field: string; order: SortOrder };
-    onSort: (field: string) => void;
-    children: React.ReactNode;
-  }) => (
-    <button
-      onClick={() => onSort(field)}
-      className="flex items-center gap-1 font-medium hover:text-primary"
-    >
-      {children}
-      {currentSort.field === field &&
-        (currentSort.order === "desc" ? (
-          <ChevronDown className="h-4 w-4" />
-        ) : (
-          <ChevronUp className="h-4 w-4" />
-        ))}
-    </button>
-  );
-
-  const toggleSort = (
-    field: string,
-    currentSort: { field: string; order: SortOrder },
-    setSort: React.Dispatch<React.SetStateAction<{ field: string; order: SortOrder }>>
-  ) => {
-    if (currentSort.field === field) {
-      setSort({ field, order: currentSort.order === "desc" ? "asc" : "desc" });
-    } else {
-      setSort({ field, order: "desc" });
+  const refreshActive = () => {
+    refreshOverview();
+    switch (activeTab) {
+      case "reviewers":
+        fetchReviewers();
+        break;
+      case "reviews":
+        fetchReviews();
+        break;
+      case "feedback":
+        fetchFeedback();
+        break;
+      case "segments":
+        fetchSegments();
+        break;
     }
   };
 
-  // Login form
+  const toggleReviewerSort = (field: ReviewerSortField) => {
+    setReviewerSort((prev) =>
+      prev.field === field
+        ? { field, order: prev.order === "desc" ? "asc" : "desc" }
+        : { field, order: "desc" }
+    );
+  };
+
+  const toggleSegmentSort = (field: SegmentSortField) => {
+    setSegmentSort((prev) =>
+      prev.field === field
+        ? { field, order: prev.order === "desc" ? "asc" : "desc" }
+        : { field, order: "desc" }
+    );
+  };
+
+  // Login
   if (!isAuthenticated) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
-              <Shield className="h-8 w-8 text-primary" />
+      <main className="flex min-h-screen flex-col items-center justify-center bg-slate-50 p-4">
+        <motion.div
+          initial={prefersReducedMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-8 shadow-sm"
+        >
+          <div className="text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-slate-900 text-white">
+              <Shield className="h-5 w-5" />
             </div>
-            <CardTitle className="text-2xl font-bold">Administration</CardTitle>
-            <p className="mt-2 text-muted-foreground">Accès réservé aux administrateurs</p>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="token">Token d&apos;accès</Label>
-                <Input
-                  id="token"
-                  type="password"
-                  placeholder="Entrez le token admin"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  disabled={isLoading}
-                  required
-                />
-                {error && <p className="text-sm text-destructive">{error}</p>}
-              </div>
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Vérification..." : "Accéder"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+            <h1 className="text-xl font-bold text-slate-900">Administration</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Accès réservé aux administrateurs
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} className="mt-6 space-y-4">
+            <div>
+              <Label htmlFor="token" className="text-xs text-slate-500">
+                Token d&apos;accès
+              </Label>
+              <Input
+                id="token"
+                type="password"
+                placeholder="Entrez le token admin"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                disabled={authChecking}
+                className="mt-1.5"
+                required
+                autoFocus
+              />
+              {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+            </div>
+            <Button
+              type="submit"
+              className="w-full bg-slate-900 hover:bg-slate-800"
+              disabled={authChecking}
+            >
+              {authChecking ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Accéder"
+              )}
+            </Button>
+          </form>
+        </motion.div>
       </main>
     );
   }
 
-  // Admin dashboard
-  return (
-    <main className="min-h-screen p-4 md:p-8">
-      <div className="mx-auto max-w-7xl">
-        {/* Header */}
-        <div className="mb-8 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10">
-              <Shield className="h-5 w-5 text-primary" />
-            </div>
-            <h1 className="text-2xl font-bold">Administration Selaou</h1>
-          </div>
-          <Button variant="outline" onClick={handleLogout}>
-            <LogOut className="mr-2 h-4 w-4" />
-            Déconnexion
-          </Button>
-        </div>
+  // Tabs definition
+  const tabs: AdminTabDef<Tab>[] = [
+    { value: "reviewers", label: "Annotateurs", icon: Users, badge: overview?.reviewers.total },
+    { value: "reviews", label: "Annotations", icon: FileText, badge: overview?.reviews.total },
+    {
+      value: "feedback",
+      label: "Alertes",
+      icon: AlertTriangle,
+      badge: overview?.feedback.audioIssues,
+      badgeUrgent: (overview?.feedback.audioIssues ?? 0) > 0,
+    },
+    { value: "segments", label: "Segments", icon: MessageSquare },
+    { value: "export", label: "Export", icon: Download },
+  ];
 
-        {/* Error display */}
-        {error && (
-          <div className="mb-4 rounded-lg bg-destructive/10 p-4 text-destructive">{error}</div>
-        )}
+  return (
+    <main className="min-h-screen bg-slate-50">
+      {/* Top bar */}
+      <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/85 backdrop-blur">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-slate-900 text-white">
+              <Shield className="h-3.5 w-3.5" />
+            </span>
+            <div className="flex items-baseline gap-2">
+              <h1 className="font-semibold text-slate-900">Administration</h1>
+              <span className="text-xs text-slate-400">Selaou</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={refreshActive}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 px-2.5 py-1.5 text-xs font-medium transition-colors"
+              disabled={isFetching}
+              title="Actualiser"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? "animate-spin" : ""}`} />
+              <span className="hidden sm:inline">Actualiser</span>
+            </button>
+            <button
+              onClick={handleLogout}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 px-2.5 py-1.5 text-xs font-medium transition-colors"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Déconnexion</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 py-6 space-y-6">
+        {/* KPIs */}
+        <StatsOverview data={overview} />
 
         {/* Tabs */}
-        <div className="mb-6 flex flex-wrap gap-2 border-b pb-4">
-          <Button
-            variant={activeTab === "reviewers" ? "default" : "outline"}
-            onClick={() => setActiveTab("reviewers")}
-          >
-            <Users className="mr-2 h-4 w-4" />
-            Annotateurs
-          </Button>
-          <Button
-            variant={activeTab === "reviews" ? "default" : "outline"}
-            onClick={() => setActiveTab("reviews")}
-          >
-            <FileText className="mr-2 h-4 w-4" />
-            Annotations
-          </Button>
-          <Button
-            variant={activeTab === "feedback" ? "default" : "outline"}
-            onClick={() => setActiveTab("feedback")}
-          >
-            <AlertTriangle className="mr-2 h-4 w-4" />
-            Alertes & Remarques
-            {(feedbackCounts.audio_issue || 0) > 0 && (
-              <span className="ml-2 rounded-full bg-destructive px-2 py-0.5 text-xs text-white">
-                {feedbackCounts.audio_issue}
-              </span>
-            )}
-          </Button>
-          <Button
-            variant={activeTab === "segments" ? "default" : "outline"}
-            onClick={() => setActiveTab("segments")}
-          >
-            <MessageSquare className="mr-2 h-4 w-4" />
-            Segments
-          </Button>
-          <Button
-            variant={activeTab === "export" ? "default" : "outline"}
-            onClick={() => setActiveTab("export")}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            Export
-          </Button>
-        </div>
+        <AdminTabs tabs={tabs} active={activeTab} onSelect={setActiveTab} />
 
-        {/* Content */}
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle>
-              {activeTab === "reviewers" && "Liste des annotateurs"}
-              {activeTab === "reviews" && "Dernières annotations"}
-              {activeTab === "feedback" && "Alertes et remarques"}
-              {activeTab === "segments" && "Segments annotés"}
-              {activeTab === "export" && "Exporter les données"}
-            </CardTitle>
-{activeTab !== "export" && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  switch (activeTab) {
-                    case "reviewers":
-                      fetchReviewers();
-                      break;
-                    case "reviews":
-                      fetchReviews();
-                      break;
-                    case "feedback":
-                      fetchFeedback();
-                      break;
-                    case "segments":
-                      fetchSegments();
-                      break;
-                  }
-                }}
-                disabled={isLoading}
-              >
-                <RefreshCw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-                Actualiser
-              </Button>
-            )}
-          </CardHeader>
-          <CardContent>
-            {/* Reviewers Tab */}
+        {/* Tab content */}
+        <AnimatePresence mode="wait">
+          <motion.section
+            key={activeTab}
+            initial={prefersReducedMotion ? false : { opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={prefersReducedMotion ? undefined : { opacity: 0 }}
+            transition={{ duration: 0.18 }}
+          >
             {activeTab === "reviewers" && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="pb-3 pr-4">Email</th>
-                      <th className="pb-3 pr-4">
-                        <SortButton
-                          field="reviewCount"
-                          currentSort={reviewerSort}
-                          onSort={(f) => toggleSort(f, reviewerSort, setReviewerSort)}
-                        >
-                          Annotations
-                        </SortButton>
-                      </th>
-                      <th className="pb-3 pr-4">
-                        <SortButton
-                          field="correctionCount"
-                          currentSort={reviewerSort}
-                          onSort={(f) => toggleSort(f, reviewerSort, setReviewerSort)}
-                        >
-                          Corrections
-                        </SortButton>
-                      </th>
-                      <th className="pb-3 pr-4">Taux correction</th>
-                      <th className="pb-3 pr-4">
-                        <SortButton
-                          field="createdAt"
-                          currentSort={reviewerSort}
-                          onSort={(f) => toggleSort(f, reviewerSort, setReviewerSort)}
-                        >
-                          Inscrit le
-                        </SortButton>
-                      </th>
-                      <th className="pb-3">
-                        <SortButton
-                          field="lastReviewAt"
-                          currentSort={reviewerSort}
-                          onSort={(f) => toggleSort(f, reviewerSort, setReviewerSort)}
-                        >
-                          Dernière activité
-                        </SortButton>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reviewers.map((reviewer) => (
-                      <tr key={reviewer.id} className="border-b last:border-0">
-                        <td className="py-3 pr-4 font-mono text-xs">{reviewer.email}</td>
-                        <td className="py-3 pr-4">
-                          <span className="rounded bg-primary/10 px-2 py-1 font-medium">
-                            {reviewer.reviewCount}
-                          </span>
-                        </td>
-                        <td className="py-3 pr-4">{reviewer.correctionCount}</td>
-                        <td className="py-3 pr-4">
-                          {reviewer.reviewCount > 0
-                            ? `${Math.round((reviewer.correctionCount / reviewer.reviewCount) * 100)}%`
-                            : "-"}
-                        </td>
-                        <td className="py-3 pr-4 text-muted-foreground">
-                          {formatDate(reviewer.createdAt)}
-                        </td>
-                        <td className="py-3 text-muted-foreground">
-                          {formatDate(reviewer.lastReviewAt)}
-                        </td>
-                      </tr>
-                    ))}
-                    {reviewers.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="py-8 text-center text-muted-foreground">
-                          Aucun annotateur trouvé
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              <ReviewersTable
+                reviewers={reviewers}
+                sort={reviewerSort}
+                onSort={toggleReviewerSort}
+              />
             )}
 
-            {/* Reviews Tab */}
-            {activeTab === "reviews" && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="pb-3 pr-4">Annotateur</th>
-                      <th className="pb-3 pr-4">Source</th>
-                      <th className="pb-3 pr-4">Texte original</th>
-                      <th className="pb-3 pr-4">Correction</th>
-                      <th className="pb-3 pr-4">Statut</th>
-                      <th className="pb-3">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reviews.map((review) => (
-                      <tr key={review.id} className="border-b last:border-0">
-                        <td className="py-3 pr-4 font-mono text-xs">{review.reviewerEmail}</td>
-                        <td className="py-3 pr-4 max-w-[150px] truncate" title={review.audioSourceName}>
-                          {review.audioSourceName}
-                        </td>
-                        <td className="py-3 pr-4 max-w-[200px] truncate" title={review.segmentText}>
-                          {review.segmentText}
-                        </td>
-                        <td className="py-3 pr-4 max-w-[200px] truncate" title={review.correctedText || "-"}>
-                          {review.correctedText || "-"}
-                        </td>
-                        <td className="py-3 pr-4">
-                          {review.isCorrect ? (
-                            <span className="rounded bg-green-100 px-2 py-1 text-xs text-green-800">
-                              Validé
-                            </span>
-                          ) : (
-                            <span className="rounded bg-blue-100 px-2 py-1 text-xs text-blue-800">
-                              Corrigé
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3 text-muted-foreground">{formatDate(review.createdAt)}</td>
-                      </tr>
-                    ))}
-                    {reviews.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="py-8 text-center text-muted-foreground">
-                          Aucune annotation trouvée
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
+            {activeTab === "reviews" && <ReviewsList reviews={reviews} />}
 
-            {/* Feedback Tab */}
             {activeTab === "feedback" && (
-              <div>
-                {/* Filters */}
-                <div className="mb-4 flex gap-2">
-                  <Button
-                    variant={feedbackFilter === "" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFeedbackFilter("")}
-                  >
-                    Tout ({(feedbackCounts.audio_issue || 0) + (feedbackCounts.remark || 0)})
-                  </Button>
-                  <Button
-                    variant={feedbackFilter === "audio_issue" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFeedbackFilter("audio_issue")}
-                  >
-                    <AlertTriangle className="mr-1 h-3 w-3" />
-                    Problèmes audio ({feedbackCounts.audio_issue || 0})
-                  </Button>
-                  <Button
-                    variant={feedbackFilter === "remark" ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setFeedbackFilter("remark")}
-                  >
-                    <MessageSquare className="mr-1 h-3 w-3" />
-                    Remarques ({feedbackCounts.remark || 0})
-                  </Button>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="pb-3 pr-4">Type</th>
-                        <th className="pb-3 pr-4">Signalé par</th>
-                        <th className="pb-3 pr-4">Source</th>
-                        <th className="pb-3 pr-4">Segment</th>
-                        <th className="pb-3 pr-4">Message</th>
-                        <th className="pb-3 pr-4">Date</th>
-                        <th className="pb-3">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {feedback.map((fb) => (
-                        <tr key={fb.id} className="border-b last:border-0">
-                          <td className="py-3 pr-4">
-                            {fb.type === "audio_issue" ? (
-                              <span className="flex items-center gap-1 rounded bg-red-100 px-2 py-1 text-xs text-red-800">
-                                <AlertTriangle className="h-3 w-3" />
-                                Audio
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-1 rounded bg-yellow-100 px-2 py-1 text-xs text-yellow-800">
-                                <MessageSquare className="h-3 w-3" />
-                                Remarque
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 pr-4 font-mono text-xs">{fb.reviewerEmail}</td>
-                          <td className="py-3 pr-4 max-w-[120px] truncate" title={fb.audioSourceName}>
-                            {fb.audioSourceName}
-                          </td>
-                          <td className="py-3 pr-4 max-w-[150px] truncate" title={fb.segmentText}>
-                            {fb.segmentText}
-                          </td>
-                          <td className="py-3 pr-4 max-w-[200px] truncate" title={fb.message || "-"}>
-                            {fb.message || "-"}
-                          </td>
-                          <td className="py-3 pr-4 text-muted-foreground">{formatDate(fb.createdAt)}</td>
-                          <td className="py-3">
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => deleteSegment(fb.segmentId)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                      {feedback.length === 0 && (
-                        <tr>
-                          <td colSpan={7} className="py-8 text-center text-muted-foreground">
-                            Aucune alerte ou remarque
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <FeedbackList
+                feedback={feedback}
+                counts={feedbackCounts}
+                filter={feedbackFilter}
+                onFilterChange={setFeedbackFilter}
+                onDeleteSegment={deleteSegment}
+              />
             )}
 
-            {/* Segments Tab */}
             {activeTab === "segments" && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="pb-3 pr-4">Source</th>
-                      <th className="pb-3 pr-4">Texte</th>
-                      <th className="pb-3 pr-4">
-                        <SortButton
-                          field="reviewCount"
-                          currentSort={segmentSort}
-                          onSort={(f) => toggleSort(f, segmentSort, setSegmentSort)}
-                        >
-                          Annotations
-                        </SortButton>
-                      </th>
-                      <th className="pb-3 pr-4">
-                        <SortButton
-                          field="confidence"
-                          currentSort={segmentSort}
-                          onSort={(f) => toggleSort(f, segmentSort, setSegmentSort)}
-                        >
-                          Confiance
-                        </SortButton>
-                      </th>
-                      <th className="pb-3 pr-4">Durée</th>
-                      <th className="pb-3">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {segments.map((segment) => (
-                      <tr key={segment.id} className="border-b last:border-0">
-                        <td className="py-3 pr-4 max-w-[150px] truncate" title={segment.audioSourceName}>
-                          {segment.audioSourceName}
-                        </td>
-                        <td className="py-3 pr-4 max-w-[300px] truncate" title={segment.text}>
-                          {segment.text}
-                        </td>
-                        <td className="py-3 pr-4">
-                          <span className="rounded bg-primary/10 px-2 py-1 font-medium">
-                            {segment.reviewCount}
-                          </span>
-                        </td>
-                        <td className="py-3 pr-4">
-                          <span
-                            className={`rounded px-2 py-1 text-xs ${
-                              parseFloat(segment.confidence) >= 0.6
-                                ? "bg-green-100 text-green-800"
-                                : parseFloat(segment.confidence) >= 0.4
-                                  ? "bg-yellow-100 text-yellow-800"
-                                  : "bg-red-100 text-red-800"
-                            }`}
-                          >
-                            {(parseFloat(segment.confidence) * 100).toFixed(0)}%
-                          </span>
-                        </td>
-                        <td className="py-3 pr-4 text-muted-foreground">
-                          {(parseFloat(segment.endTime) - parseFloat(segment.startTime)).toFixed(1)}s
-                        </td>
-                        <td className="py-3">
-                          <div className="flex gap-1">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                const audio = new Audio(segment.audioUrl);
-                                audio.currentTime = parseFloat(segment.startTime);
-                                audio.play();
-                                setTimeout(
-                                  () => audio.pause(),
-                                  (parseFloat(segment.endTime) - parseFloat(segment.startTime)) * 1000
-                                );
-                              }}
-                              title="Écouter le segment"
-                            >
-                              <Play className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                const startSeconds = Math.floor(parseFloat(segment.startTime));
-                                const url = `${segment.audioUrl}#t=${startSeconds}`;
-                                window.open(url, "_blank");
-                              }}
-                              title={`Ouvrir la source à ${segment.startTime}s`}
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => deleteSegment(segment.id)}
-                              title="Supprimer le segment"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {segments.length === 0 && (
-                      <tr>
-                        <td colSpan={6} className="py-8 text-center text-muted-foreground">
-                          Aucun segment annoté
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+              <SegmentsTable
+                segments={segments}
+                sort={segmentSort}
+                onSort={toggleSegmentSort}
+                onDelete={deleteSegment}
+              />
             )}
 
-            {/* Export Tab */}
-            {activeTab === "export" && (
-              <ExportSection token={token} />
-            )}
-          </CardContent>
-        </Card>
+            {activeTab === "export" && <ExportSection token={token} />}
+          </motion.section>
+        </AnimatePresence>
       </div>
     </main>
   );
 }
+
+// ─── Export section (kept inline — closely tied to admin page) ─────────────
 
 interface ExportCardProps {
   title: string;
@@ -796,20 +425,20 @@ function ExportCard({ title, description, icon, type, token, formats = ["json", 
 
   const handleDownload = () => {
     setIsDownloading(true);
-    const url = `/api/admin/export?token=${token}&type=${type}&format=${selectedFormat}`;
+    const url = `/api/admin/export?token=${encodeURIComponent(token)}&type=${type}&format=${selectedFormat}`;
     window.open(url, "_blank");
     setTimeout(() => setIsDownloading(false), 1000);
   };
 
   return (
-    <div className="flex flex-col rounded-lg border bg-card p-6 shadow-sm transition-shadow hover:shadow-md">
+    <div className="flex flex-col rounded-xl border border-slate-200 bg-white p-5 transition-shadow hover:shadow-sm">
       <div className="mb-4 flex items-center gap-3">
-        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
           {icon}
         </div>
         <div>
-          <h3 className="font-semibold">{title}</h3>
-          <p className="text-sm text-muted-foreground">{description}</p>
+          <h3 className="font-semibold text-slate-900 text-sm">{title}</h3>
+          <p className="text-xs text-slate-500">{description}</p>
         </div>
       </div>
 
@@ -817,15 +446,20 @@ function ExportCard({ title, description, icon, type, token, formats = ["json", 
         <select
           value={selectedFormat}
           onChange={(e) => setSelectedFormat(e.target.value as ExportFormat)}
-          className="rounded-md border bg-background px-3 py-2 text-sm"
+          className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs"
         >
           {formats.includes("json") && <option value="json">JSON</option>}
           {formats.includes("csv") && <option value="csv">CSV</option>}
           {formats.includes("jsonl") && <option value="jsonl">JSONL</option>}
         </select>
-        <Button onClick={handleDownload} disabled={isDownloading} className="flex-1">
-          <Download className="mr-2 h-4 w-4" />
-          {isDownloading ? "Téléchargement..." : "Télécharger"}
+        <Button
+          onClick={handleDownload}
+          disabled={isDownloading}
+          size="sm"
+          className="flex-1 bg-slate-900 hover:bg-slate-800"
+        >
+          <Download className="mr-1.5 h-3.5 w-3.5" />
+          {isDownloading ? "..." : "Télécharger"}
         </Button>
       </div>
     </div>
@@ -835,71 +469,66 @@ function ExportCard({ title, description, icon, type, token, formats = ["json", 
 function ExportSection({ token }: { token: string }) {
   return (
     <div className="space-y-6">
-      <p className="text-muted-foreground">
+      <p className="text-sm text-slate-500">
         Exportez vos données dans différents formats selon vos besoins.
       </p>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         <ExportCard
           title="Dataset IA"
           description="Format optimisé pour l'entraînement (HuggingFace)"
-          icon={<Database className="h-6 w-6 text-primary" />}
+          icon={<Database className="h-5 w-5" />}
           type="dataset"
           token={token}
           formats={["jsonl", "json", "csv"]}
         />
-
         <ExportCard
           title="Annotateurs"
           description="Liste des contributeurs et leurs statistiques"
-          icon={<Users className="h-6 w-6 text-primary" />}
+          icon={<Users className="h-5 w-5" />}
           type="reviewers"
           token={token}
         />
-
         <ExportCard
           title="Annotations"
           description="Toutes les corrections et validations"
-          icon={<FileText className="h-6 w-6 text-primary" />}
+          icon={<FileText className="h-5 w-5" />}
           type="reviews"
           token={token}
         />
-
         <ExportCard
           title="Segments"
           description="Tous les segments audio avec métadonnées"
-          icon={<Table className="h-6 w-6 text-primary" />}
+          icon={<Table className="h-5 w-5" />}
           type="segments"
           token={token}
         />
-
         <ExportCard
           title="Alertes & Remarques"
           description="Feedbacks signalés par les annotateurs"
-          icon={<AlertTriangle className="h-6 w-6 text-primary" />}
+          icon={<AlertTriangle className="h-5 w-5" />}
           type="feedback"
           token={token}
         />
-
         <ExportCard
           title="Export complet"
           description="Toutes les données en un seul fichier"
-          icon={<Archive className="h-6 w-6 text-primary" />}
+          icon={<Archive className="h-5 w-5" />}
           type="full"
           token={token}
           formats={["json"]}
         />
       </div>
 
-      <div className="rounded-lg border border-dashed p-4">
-        <h4 className="mb-2 font-medium flex items-center gap-2">
+      <div className="rounded-xl border border-dashed border-slate-200 bg-white p-4">
+        <h4 className="mb-2 font-medium text-sm flex items-center gap-2 text-slate-700">
           <FileJson className="h-4 w-4" />
           Formats disponibles
         </h4>
-        <ul className="space-y-1 text-sm text-muted-foreground">
-          <li><strong>JSON</strong> - Format structuré, idéal pour l&apos;analyse et l&apos;intégration</li>
-          <li><strong>CSV</strong> - Compatible Excel/Google Sheets pour l&apos;analyse manuelle</li>
-          <li><strong>JSONL</strong> - Une ligne par entrée, optimisé pour le streaming et HuggingFace</li>
+        <ul className="space-y-1 text-sm text-slate-500">
+          <li><strong className="text-slate-700">JSON</strong> — Format structuré, idéal pour l&apos;analyse et l&apos;intégration</li>
+          <li><strong className="text-slate-700">CSV</strong> — Compatible Excel/Google Sheets pour l&apos;analyse manuelle</li>
+          <li><strong className="text-slate-700">JSONL</strong> — Une ligne par entrée, optimisé pour le streaming et HuggingFace</li>
         </ul>
       </div>
     </div>

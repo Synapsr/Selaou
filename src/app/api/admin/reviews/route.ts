@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
         correctedWords: schema.reviews.correctedWords,
         createdAt: schema.reviews.createdAt,
         reviewerEmail: schema.reviewers.email,
+        reviewerDisplayName: schema.reviewers.displayName,
         segmentText: schema.segments.text,
         audioSourceName: schema.audioSources.name,
       })
