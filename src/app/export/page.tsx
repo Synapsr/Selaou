@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { Download, FileJson, FileSpreadsheet, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -144,9 +145,9 @@ export default function ExportPage() {
 
       {/* Back link */}
       <p className="mt-8 text-center">
-        <a href="/" className="text-primary hover:underline">
+        <Link href="/" className="text-primary hover:underline">
           Retour a l&apos;accueil
-        </a>
+        </Link>
       </p>
     </main>
   );
